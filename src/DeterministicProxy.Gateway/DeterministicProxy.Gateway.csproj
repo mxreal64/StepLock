@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DeterministicProxy.Core\DeterministicProxy.Core.csproj" />
+    <ProjectReference Include="..\DeterministicProxy.Engine\DeterministicProxy.Engine.csproj" />
+    <ProjectReference Include="..\DeterministicProxy.Storage\DeterministicProxy.Storage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.2.0" />
+  </ItemGroup>
+
+</Project>

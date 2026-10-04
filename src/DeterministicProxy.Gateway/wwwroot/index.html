@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StepLock | Deterministic Execution Gateway</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:        #0d1117;
+            --card:      #161b22;
+            --border:    #30363d;
+            --text:      #c9d1d9;
+            --muted:     #8b949e;
+            --accent:    #3fb950;
+            --accent2:   #58a6ff;
+            --danger:    #f85149;
+            --warn:      #d29922;
+            --purple:    #bc8cff;
+            --radius:    8px;
+            --font:      -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            --mono:      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font);
+            font-size: 14px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Navbar ───────────────────────────────────────────────── */
+        header {
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .nav-brand { display: flex; align-items: center; gap: 10px; }
+        .nav-brand svg { width: 28px; height: 28px; color: var(--accent); flex-shrink: 0; }
+        .nav-title { font-size: 15px; font-weight: 600; color: #e6edf3; letter-spacing: -0.3px; }
+        .nav-subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+        .nav-right { display: flex; align-items: center; gap: 16px; }
+        .health-pill {
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            font-size: 12px;
+            font-weight: 500;
+            transition: border-color .2s, background .2s;
+        }
+        .health-pill.healthy { border-color: var(--accent); background: rgba(63,185,80,.08); color: var(--accent); }
+        .health-pill.unhealthy { border-color: var(--danger); background: rgba(248,81,73,.08); color: var(--danger); }
+        .health-pill.unknown { border-color: var(--border); color: var(--muted); }
+        .health-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: currentColor;
+        }
+        .health-pill.healthy .health-dot { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; } 50% { opacity: .4; }
+        }
+
+        .btn {
+            padding: 5px 14px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text);
+            font-size: 13px;
+            font-family: var(--font);
+            cursor: pointer;
+            transition: background .15s, border-color .15s;
+        }
+        .btn:hover { background: #21262d; border-color: #8b949e; }
+        .btn-accent { background: var(--accent); border-color: var(--accent); color: #0d1117; font-weight: 600; }
+        .btn-accent:hover { background: #45c152; border-color: #45c152; }
+        .btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; font-weight: 600; }
+        .btn-primary:hover { background: #388bfd; border-color: #388bfd; }
+
+        /* ── Layout ───────────────────────────────────────────────── */
+        main {
+            flex: 1;
+            padding: 24px;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* ── Stats Row ────────────────────────────────────────────── */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+        }
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+        .stat-value { font-size: 28px; font-weight: 700; color: #e6edf3; line-height: 1; font-variant-numeric: tabular-nums; }
+        .stat-sub { font-size: 11px; color: var(--muted); }
+        .stat-accent { color: var(--accent); }
+        .stat-blue { color: var(--accent2); }
+
+        /* ── Main grid ────────────────────────────────────────────── */
+        .grid-main {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            gap: 20px;
+            align-items: start;
+        }
+
+        /* ── Card ─────────────────────────────────────────────────── */
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+        .card-header {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #e6edf3;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+        .card-body { padding: 0; }
+
+        /* ── Sessions table ───────────────────────────────────────── */
+        .sessions-table { width: 100%; border-collapse: collapse; }
+        .sessions-table th {
+            padding: 8px 14px;
+            text-align: left;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: .4px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255,255,255,.02);
+        }
+        .sessions-table td {
+            padding: 10px 14px;
+            font-size: 12px;
+            color: var(--text);
+            border-bottom: 1px solid #21262d;
+            vertical-align: middle;
+        }
+        .sessions-table tr:last-child td { border-bottom: none; }
+        .sessions-table tbody tr {
+            cursor: pointer;
+            transition: background .1s;
+        }
+        .sessions-table tbody tr:hover td { background: rgba(255,255,255,.03); }
+        .sessions-table tbody tr.active td { background: rgba(63,185,80,.06); }
+        .sessions-table tbody tr.active td:first-child { border-left: 2px solid var(--accent); padding-left: 12px; }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 500;
+            font-family: var(--mono);
+        }
+        .badge-green { background: rgba(63,185,80,.12); color: var(--accent); border: 1px solid rgba(63,185,80,.25); }
+        .badge-blue  { background: rgba(88,166,255,.12); color: var(--accent2); border: 1px solid rgba(88,166,255,.25); }
+        .badge-red   { background: rgba(248,81,73,.12); color: var(--danger); border: 1px solid rgba(248,81,73,.25); }
+        .badge-gray  { background: rgba(139,148,158,.1); color: var(--muted); border: 1px solid var(--border); }
+
+        .mono { font-family: var(--mono); }
+        .text-muted { color: var(--muted); }
+        .text-accent { color: var(--accent); }
+        .text-blue { color: var(--accent2); }
+        .text-danger { color: var(--danger); }
+        .text-warn { color: var(--warn); }
+
+        /* ── Right column ─────────────────────────────────────────── */
+        .right-col {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* ── Timeline ─────────────────────────────────────────────── */
+        .timeline { padding: 16px 18px; display: flex; flex-direction: column; gap: 0; }
+        .timeline-item {
+            display: flex;
+            gap: 12px;
+            cursor: pointer;
+            padding: 8px 10px 8px 0;
+            border-radius: var(--radius);
+            transition: background .1s;
+            position: relative;
+        }
+        .timeline-item:hover { background: rgba(255,255,255,.03); }
+        .timeline-item.selected { background: rgba(63,185,80,.06); }
+        .tl-connector {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex-shrink: 0;
+            width: 32px;
+        }
+        .tl-dot {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            background: var(--card);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--muted);
+            flex-shrink: 0;
+            z-index: 1;
+            transition: border-color .15s;
+        }
+        .tl-dot.safe { border-color: rgba(63,185,80,.5); color: var(--accent); }
+        .tl-dot.mutating { border-color: rgba(248,81,73,.5); color: var(--danger); }
+        .tl-line {
+            flex: 1;
+            width: 2px;
+            background: #21262d;
+            margin: 2px 0;
+            min-height: 16px;
+        }
+        .timeline-item:last-child .tl-line { display: none; }
+        .tl-body {
+            flex: 1;
+            padding-top: 2px;
+        }
+        .tl-top {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 3px;
+        }
+        .tl-method {
+            font-family: var(--mono);
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .tl-method.post { color: var(--warn); }
+        .tl-method.get  { color: var(--accent2); }
+        .tl-uri { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
+        .tl-meta { font-size: 11px; color: var(--muted); font-family: var(--mono); display: flex; gap: 12px; }
+
+        /* ── Step Details Inspector ───────────────────────────────── */
+        .inspector { padding: 16px 18px; }
+        .inspector-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 32px 0; }
+        .kv-row { display: flex; gap: 8px; margin-bottom: 8px; font-size: 12px; }
+        .kv-key { color: var(--muted); min-width: 130px; flex-shrink: 0; }
+        .kv-val { color: var(--text); font-family: var(--mono); word-break: break-all; }
+
+        /* ── Branch Diff ──────────────────────────────────────────── */
+        .diff-controls {
+            padding: 14px 18px;
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 10px;
+            align-items: end;
+        }
+        .form-group { display: flex; flex-direction: column; gap: 5px; }
+        .form-label { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .4px; }
+        .form-input, .form-select {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 6px 10px;
+            color: var(--text);
+            font-size: 13px;
+            font-family: var(--font);
+            outline: none;
+            transition: border-color .15s;
+            width: 100%;
+        }
+        .form-input:focus, .form-select:focus { border-color: var(--accent2); }
+
+        .diff-result { padding: 0 18px 16px; }
+        .diff-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .diff-table th { padding: 6px 10px; font-size: 11px; color: var(--muted); text-align: left; border-bottom: 1px solid var(--border); }
+        .diff-table td { padding: 7px 10px; border-bottom: 1px solid #21262d; font-family: var(--mono); }
+        .diff-table tr:last-child td { border-bottom: none; }
+        .diff-same td { color: var(--muted); }
+        .diff-diverge td { background: rgba(248,81,73,.06); color: var(--danger); }
+        .diff-diverge td:first-child { border-left: 2px solid var(--danger); padding-left: 8px; }
+
+        /* ── DAG Integrity ────────────────────────────────────────── */
+        .dag-controls {
+            padding: 14px 18px;
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 10px;
+            align-items: end;
+        }
+        .dag-result { padding: 0 18px 16px; }
+        .dag-badge-wrap { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: rgba(255,255,255,.02); }
+        .dag-badge-wrap.valid { border-color: rgba(63,185,80,.3); background: rgba(63,185,80,.06); }
+        .dag-badge-wrap.invalid { border-color: rgba(248,81,73,.3); background: rgba(248,81,73,.06); }
+        .dag-badge-icon { font-size: 22px; }
+        .dag-badge-text { font-size: 13px; font-weight: 600; }
+        .dag-badge-wrap.valid .dag-badge-text { color: var(--accent); }
+        .dag-badge-wrap.invalid .dag-badge-text { color: var(--danger); }
+
+        /* ── Empty / Loading states ───────────────────────────────── */
+        .empty-state { text-align: center; padding: 32px 16px; color: var(--muted); font-size: 13px; }
+        .spinner {
+            display: inline-block; width: 16px; height: 16px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent2);
+            border-radius: 50%;
+            animation: spin .7s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Responsive ───────────────────────────────────────────── */
+        @media (max-width: 1100px) {
+            .grid-main { grid-template-columns: 1fr; }
+            .stats-row  { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 600px) {
+            .stats-row { grid-template-columns: 1fr 1fr; }
+            main { padding: 12px; }
+        }
+
+        /* ── Scrollbars ───────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+<!-- ── Navbar ─────────────────────────────────────────────────────── -->
+<header>
+    <div class="nav-brand">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/>
+            <path d="M4 6h.01"/>
+            <path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/>
+        </svg>
+        <div>
+            <div class="nav-title">StepLock Gateway</div>
+            <div class="nav-subtitle">Deterministic state proxy &amp; multi-branch execution engine</div>
+        </div>
+    </div>
+    <div class="nav-right">
+        <div id="healthPill" class="health-pill unknown">
+            <div class="health-dot"></div>
+            <span id="healthLabel">Checking…</span>
+        </div>
+        <button class="btn" onclick="refreshAll()">↻ Refresh</button>
+    </div>
+</header>
+
+<!-- ── Main ───────────────────────────────────────────────────────── -->
+<main>
+
+    <!-- Stats Row -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-label">Recorded Steps</div>
+            <div class="stat-value stat-accent" id="statRecorded">—</div>
+            <div class="stat-sub">Frames persisted to store</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Replayed Steps</div>
+            <div class="stat-value stat-blue" id="statReplayed">—</div>
+            <div class="stat-sub">Cache hits served</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Sessions</div>
+            <div class="stat-value" id="statSessions">—</div>
+            <div class="stat-sub">Active agent sessions</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Cache Hit Rate</div>
+            <div class="stat-value" id="statHitRate">—</div>
+            <div class="stat-sub">Across all sessions</div>
+        </div>
+    </div>
+
+    <!-- Main grid: sessions list | right panel -->
+    <div class="grid-main">
+
+        <!-- Left: Sessions table -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:var(--accent)"><path d="M1 5a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V5zm2 1v4h10V6H3z"/></svg>
+                    Sessions
+                </span>
+                <span id="sessionCount" class="badge badge-gray">0</span>
+            </div>
+            <div class="card-body">
+                <table class="sessions-table">
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>Branch</th>
+                            <th>Steps</th>
+                            <th>Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sessionsBody">
+                        <tr><td colspan="4" class="empty-state">Loading sessions…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Right column -->
+        <div class="right-col">
+
+            <!-- Session detail / timeline -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:var(--accent2)"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm.5 4.75a.75.75 0 0 0-1.5 0v3.5l-1.5 1.5a.75.75 0 1 0 1.06 1.06l1.72-1.72V4.75z"/></svg>
+                        Execution Timeline
+                    </span>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <span id="tlSessionLabel" class="text-muted" style="font-size:12px;font-family:var(--mono)">No session selected</span>
+                        <span id="tlStepCount" class="badge badge-gray">0 steps</span>
+                    </div>
+                </div>
+                <div id="timelineWrap" style="max-height:380px;overflow-y:auto;">
+                    <div class="empty-state">Select a session from the table to view its execution steps.</div>
+                </div>
+            </div>
+
+            <!-- Step Inspector -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:var(--purple)"><path d="M10.5 8.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zm1.43-3.672a1 1 0 0 1 .57.908v.264a1 1 0 0 1-.57.908L11.5 7l.43.092a1 1 0 0 1 .57.908v.264a1 1 0 0 1-.57.908L11 9.4v.1l.93.4a1 1 0 0 1 .57.908V11a1 1 0 0 1-.57.908l-3.5 1.5a1 1 0 0 1-.86 0l-3.5-1.5A1 1 0 0 1 3 11v-.192a1 1 0 0 1 .57-.908L4.5 9.5v-.1l-.93-.4A1 1 0 0 1 3 8.092V7.908a1 1 0 0 1 .57-.908L4 6.72v-.264a1 1 0 0 1 .57-.908l3.5-1.5a1 1 0 0 1 .86 0l3.5 1.5z"/></svg>
+                        Frame Inspector
+                    </span>
+                    <span id="inspectorStepLabel" class="text-muted" style="font-size:11px;font-family:var(--mono)">No frame selected</span>
+                </div>
+                <div class="inspector" id="inspectorBody">
+                    <div class="inspector-empty">Click on an execution frame in the timeline to inspect it.</div>
+                </div>
+            </div>
+
+            <!-- Branch Diff -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:var(--warn)"><path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0zm0 2.122a2.25 2.25 0 1 0-1.5 0v.878A2.25 2.25 0 0 0 5.75 8.5h4.5a.75.75 0 0 1 .75.75v.128a2.251 2.251 0 1 0 1.5 0V9.25a2.25 2.25 0 0 0-2.25-2.25h-4.5A.75.75 0 0 1 5 6.25v-.878zm3.75 7.378a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0zm3.25.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5z"/></svg>
+                        Branch Diff Viewer
+                    </span>
+                </div>
+                <div class="diff-controls">
+                    <div class="form-group">
+                        <label class="form-label">Session ID</label>
+                        <input class="form-input" id="diffSessionId" type="text" placeholder="session-id">
+                    </div>
+                    <div class="form-group" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div>
+                            <label class="form-label">Base Branch</label>
+                            <input class="form-input" id="diffBase" type="text" value="main">
+                        </div>
+                        <div>
+                            <label class="form-label">Target Branch</label>
+                            <input class="form-input" id="diffTarget" type="text" value="experiment-v2">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="runDiff()" style="white-space:nowrap;height:32px;align-self:end;">Compare</button>
+                </div>
+                <div class="diff-result" id="diffResult"></div>
+            </div>
+
+            <!-- DAG Integrity -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color:var(--accent)"><path fill-rule="evenodd" d="M8.5 1.75a.25.25 0 0 0-.5 0v5.19L6.28 5.22a.75.75 0 1 0-1.06 1.06l2.5 2.5a.75.75 0 0 0 1.06 0l2.5-2.5a.75.75 0 1 0-1.06-1.06L8.5 6.94V1.75zM3.28 7.78a.75.75 0 0 0-1.06-1.06l-1.5 1.5a.75.75 0 0 0 0 1.06l1.5 1.5a.75.75 0 0 0 1.06-1.06l-.22-.22H7.5a.75.75 0 0 0 0-1.5H3.06l.22-.22zm9.5 0l.22.22H8.5a.75.75 0 0 0 0 1.5h4.5l-.22.22a.75.75 0 1 0 1.06 1.06l1.5-1.5a.75.75 0 0 0 0-1.06l-1.5-1.5a.75.75 0 1 0-1.06 1.06zM8.5 14.25a.25.25 0 0 1-.5 0V9.06l-1.72 1.72a.75.75 0 1 1-1.06-1.06l2.5-2.5a.75.75 0 0 1 1.06 0l2.5 2.5a.75.75 0 1 1-1.06 1.06L8.5 9.06v5.19z"/></svg>
+                        DAG Integrity Checker
+                    </span>
+                </div>
+                <div class="dag-controls">
+                    <div class="form-group">
+                        <label class="form-label">Session ID</label>
+                        <input class="form-input" id="dagSessionId" type="text" placeholder="session-id">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Branch</label>
+                        <input class="form-input" id="dagBranch" type="text" value="main">
+                    </div>
+                    <button class="btn btn-accent" onclick="runDagVerify()" style="height:32px;align-self:end;">Verify</button>
+                </div>
+                <div class="dag-result" id="dagResult"></div>
+            </div>
+
+        </div><!-- /right-col -->
+    </div><!-- /grid-main -->
+
+</main>
+
+<script>
+    /* ── State ─────────────────────────────────────────────────── */
+    let allSessions = [];
+    let currentFrames = [];
+    let selectedSessionId = null;
+    let selectedBranch = 'main';
+    let selectedFrameIdx = null;
+
+    /* ── Health polling ────────────────────────────────────────── */
+    async function checkHealth() {
+        const pill = document.getElementById('healthPill');
+        const label = document.getElementById('healthLabel');
+        try {
+            const res = await fetch('/health', { signal: AbortSignal.timeout(4000) });
+            if (res.ok) {
+                pill.className = 'health-pill healthy';
+                label.textContent = 'Healthy';
+            } else {
+                pill.className = 'health-pill unhealthy';
+                label.textContent = `Unhealthy (${res.status})`;
+            }
+        } catch {
+            pill.className = 'health-pill unhealthy';
+            label.textContent = 'Unreachable';
+        }
+    }
+
+    /* ── Sessions list ─────────────────────────────────────────── */
+    async function loadSessions() {
+        try {
+            const res = await fetch('/api/sessions');
+            if (!res.ok) throw new Error(res.status);
+            const data = await res.json();
+            allSessions = Array.isArray(data) ? data : (data.sessions || data.items || []);
+            renderSessionsTable();
+            updateStats();
+        } catch {
+            document.getElementById('sessionsBody').innerHTML =
+                `<tr><td colspan="4" class="empty-state text-danger">Failed to load sessions.</td></tr>`;
+        }
+    }
+
+    function renderSessionsTable() {
+        const tbody = document.getElementById('sessionsBody');
+        document.getElementById('sessionCount').textContent = allSessions.length;
+        if (allSessions.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" class="empty-state">No sessions found.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = allSessions.map(s => {
+            const sid  = s.session_id || s.sessionId || s.id || '—';
+            const br   = s.branch_id  || s.branchId  || s.branch || 'main';
+            const steps= s.step_count  || s.stepCount  || s.steps  || 0;
+            const upd  = s.last_updated || s.lastUpdated || s.updated_at || '';
+            const updStr = upd ? new Date(upd).toLocaleString() : '—';
+            const isActive = sid === selectedSessionId;
+            return `<tr class="${isActive ? 'active' : ''}" onclick="selectSession('${esc(sid)}','${esc(br)}')">
+                        <td class="mono" style="font-size:11px;">${esc(sid)}</td>
+                        <td><span class="badge badge-blue">${esc(br)}</span></td>
+                        <td>${steps}</td>
+                        <td class="text-muted">${updStr}</td>
+                    </tr>`;
+        }).join('');
+    }
+
+    function updateStats() {
+        let totalRecorded = 0, totalReplayed = 0;
+        allSessions.forEach(s => {
+            totalRecorded += (s.recorded_steps || s.recordedSteps || s.step_count || s.stepCount || 0);
+            totalReplayed += (s.replayed_steps || s.replayedSteps || 0);
+        });
+        const hitRate = totalRecorded > 0
+            ? Math.round(totalReplayed / (totalRecorded + totalReplayed) * 100)
+            : 0;
+        document.getElementById('statRecorded').textContent = fmt(totalRecorded);
+        document.getElementById('statReplayed').textContent = fmt(totalReplayed);
+        document.getElementById('statSessions').textContent = fmt(allSessions.length);
+        document.getElementById('statHitRate').textContent  = `${hitRate}%`;
+    }
+
+    /* ── Session selection → load timeline ─────────────────────── */
+    async function selectSession(sessionId, branch) {
+        selectedSessionId = sessionId;
+        selectedBranch = branch;
+        selectedFrameIdx = null;
+        renderSessionsTable(); // re-render to highlight active row
+        document.getElementById('tlSessionLabel').textContent = sessionId;
+        document.getElementById('diffSessionId').value = sessionId;
+        document.getElementById('dagSessionId').value  = sessionId;
+        document.getElementById('dagBranch').value     = branch;
+        document.getElementById('timelineWrap').innerHTML =
+            `<div class="empty-state"><span class="spinner"></span>Loading steps…</div>`;
+        await loadTimeline(sessionId, branch);
+    }
+
+    async function loadTimeline(sessionId, branch) {
+        try {
+            const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/history?branchId=${encodeURIComponent(branch)}`);
+            if (!res.ok) throw new Error(res.status);
+            const data = await res.json();
+            currentFrames = data.frames || data.steps || data.items || data || [];
+            renderTimeline();
+        } catch {
+            document.getElementById('timelineWrap').innerHTML =
+                `<div class="empty-state text-danger">Failed to load steps.</div>`;
+        }
+    }
+
+    function renderTimeline() {
+        const wrap = document.getElementById('timelineWrap');
+        document.getElementById('tlStepCount').textContent = `${currentFrames.length} steps`;
+        if (currentFrames.length === 0) {
+            wrap.innerHTML = `<div class="empty-state">No execution steps for this session/branch.</div>`;
+            return;
+        }
+        wrap.innerHTML = `<div class="timeline">${currentFrames.map((f, idx) => {
+            const isMutating = f.side_effect_type === 1 || f.sideEffectType === 1;
+            const dotCls = isMutating ? 'mutating' : 'safe';
+            const method  = (f.http_method || f.httpMethod || 'GET').toUpperCase();
+            const uri     = f.target_uri  || f.targetUri  || f.url || '';
+            const durationMs = f.duration_ms  || f.durationMs  || 0;
+            const ttft       = f.ttft_ms      || f.ttftMs      || 0;
+            const hash       = f.frame_hash   || f.frameHash   || f.hash || '';
+            const stepIdx    = f.step_index   !== undefined ? f.step_index : (f.stepIndex !== undefined ? f.stepIndex : idx);
+            const isSelected = idx === selectedFrameIdx;
+            const effectBadge = isMutating
+                ? `<span class="badge badge-red" style="font-size:10px;">Mutating</span>`
+                : `<span class="badge badge-green" style="font-size:10px;">Safe Replay</span>`;
+            return `<div class="timeline-item${isSelected ? ' selected' : ''}" onclick="inspectFrame(${idx})">
+                        <div class="tl-connector">
+                            <div class="tl-dot ${dotCls}">${stepIdx}</div>
+                            <div class="tl-line"></div>
+                        </div>
+                        <div class="tl-body">
+                            <div class="tl-top">
+                                <span class="tl-method ${method === 'POST' ? 'post' : 'get'}">${esc(method)}</span>
+                                <span class="tl-uri" title="${esc(uri)}">${esc(uri)}</span>
+                                ${effectBadge}
+                            </div>
+                            <div class="tl-meta">
+                                <span>⏱ ${durationMs}ms</span>
+                                ${ttft ? `<span>⚡ TTFT: ${ttft}ms</span>` : ''}
+                                ${hash ? `<span>⬡ ${hash.substring(0,10)}…</span>` : ''}
+                            </div>
+                        </div>
+                    </div>`;
+        }).join('')}</div>`;
+    }
+
+    /* ── Frame inspector ───────────────────────────────────────── */
+    function inspectFrame(idx) {
+        selectedFrameIdx = idx;
+        renderTimeline(); // re-render to update selected style
+        const f = currentFrames[idx];
+        if (!f) return;
+        const hash       = f.frame_hash   || f.frameHash   || f.hash || '';
+        const parentHash = f.parent_step_hash || f.parentStepHash || f.parent_hash || '';
+        const uri        = f.target_uri   || f.targetUri   || '';
+        const status     = f.response_status || f.responseStatus || f.status || '';
+        const dur        = f.duration_ms  || f.durationMs  || 0;
+        const ttft       = f.ttft_ms      || f.ttftMs      || 0;
+        const chunks     = f.chunks || [];
+        const stepIdx    = f.step_index !== undefined ? f.step_index : (f.stepIndex !== undefined ? f.stepIndex : idx);
+        const isMutating = f.side_effect_type === 1 || f.sideEffectType === 1;
+        document.getElementById('inspectorStepLabel').textContent = `Step ${stepIdx} · ${hash ? hash.substring(0,8) : 'n/a'}`;
+        document.getElementById('inspectorBody').innerHTML = `
+            <div style="display:flex;flex-direction:column;gap:6px;">
+                ${kv('Step Index',   stepIdx)}
+                ${kv('Frame Hash',   hash || '—', 'select-all')}
+                ${kv('Parent Hash',  parentHash || 'ROOT (Step 0)')}
+                ${kv('Target URI',   uri)}
+                ${kv('HTTP Method',  f.http_method || f.httpMethod || '—')}
+                ${kv('Status',       status)}
+                ${kv('Duration',     `${dur} ms`)}
+                ${kv('TTFT',         ttft ? `${ttft} ms` : '—')}
+                ${kv('Side Effect',  isMutating ? '<span class="badge badge-red">Mutating</span>' : '<span class="badge badge-green">Safe Replay</span>')}
+                ${kv('Chunks',       chunks.length)}
+            </div>`;
+    }
+
+    function kv(key, val, extraClass = '') {
+        return `<div class="kv-row"><span class="kv-key">${key}:</span><span class="kv-val ${extraClass}">${val}</span></div>`;
+    }
+
+    /* ── Branch diff ───────────────────────────────────────────── */
+    async function runDiff() {
+        const sessionId = document.getElementById('diffSessionId').value.trim();
+        const base      = document.getElementById('diffBase').value.trim();
+        const target    = document.getElementById('diffTarget').value.trim();
+        const el        = document.getElementById('diffResult');
+        if (!sessionId) { el.innerHTML = `<p class="text-warn" style="font-size:12px;">Enter a session ID above.</p>`; return; }
+        el.innerHTML = `<div class="empty-state"><span class="spinner"></span>Comparing branches…</div>`;
+        try {
+            const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/compare-branches?baseBranch=${encodeURIComponent(base)}&targetBranch=${encodeURIComponent(target)}`);
+            if (!res.ok) throw new Error(res.status);
+            const data = await res.json();
+            const identical = data.identical_steps_count ?? data.identicalStepsCount ?? data.identical ?? 0;
+            const divStep   = data.divergence_step_index ?? data.divergenceStepIndex ?? data.divergence_point ?? null;
+            const steps     = data.steps || data.diff_steps || [];
+            let tableRows = '';
+            if (steps.length > 0) {
+                tableRows = steps.map(s => {
+                    const isDiv = s.diverged || s.isDivergent || false;
+                    return `<tr class="${isDiv ? 'diff-diverge' : 'diff-same'}">
+                                <td>${s.step_index ?? s.stepIndex ?? '—'}</td>
+                                <td>${esc(s.base_hash   || s.baseHash   || '—').substring(0,12)}</td>
+                                <td>${esc(s.target_hash || s.targetHash || '—').substring(0,12)}</td>
+                                <td>${isDiv ? '⚠ Diverged' : '✓ Same'}</td>
+                            </tr>`;
+                }).join('');
+            }
+            el.innerHTML = `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+                    <div style="background:rgba(63,185,80,.06);border:1px solid rgba(63,185,80,.2);border-radius:6px;padding:10px;">
+                        <div class="text-muted" style="font-size:11px;margin-bottom:4px;">Identical Steps</div>
+                        <div style="font-size:20px;font-weight:700;color:var(--accent);">${identical}</div>
+                    </div>
+                    <div style="background:rgba(248,81,73,.06);border:1px solid rgba(248,81,73,.2);border-radius:6px;padding:10px;">
+                        <div class="text-muted" style="font-size:11px;margin-bottom:4px;">Divergence at Step</div>
+                        <div style="font-size:20px;font-weight:700;color:var(--danger);">${divStep !== null ? divStep : 'None'}</div>
+                    </div>
+                </div>
+                ${tableRows ? `<table class="diff-table"><thead><tr><th>Step</th><th>${esc(base)}</th><th>${esc(target)}</th><th>Status</th></tr></thead><tbody>${tableRows}</tbody></table>` : ''}`;
+        } catch {
+            el.innerHTML = `<p class="text-danger" style="font-size:12px;">Failed to compare branches.</p>`;
+        }
+    }
+
+    /* ── DAG verify ────────────────────────────────────────────── */
+    async function runDagVerify() {
+        const sessionId = document.getElementById('dagSessionId').value.trim();
+        const branch    = document.getElementById('dagBranch').value.trim();
+        const el        = document.getElementById('dagResult');
+        if (!sessionId) { el.innerHTML = `<p class="text-warn" style="font-size:12px;">Enter a session ID above.</p>`; return; }
+        el.innerHTML = `<div class="empty-state"><span class="spinner"></span>Verifying DAG integrity…</div>`;
+        try {
+            const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/verify-dag?branchId=${encodeURIComponent(branch)}`);
+            if (!res.ok) throw new Error(res.status);
+            const data = await res.json();
+            const isValid = data.is_valid_dag ?? data.isValidDag ?? data.valid ?? false;
+            const msg     = data.message || data.error || (isValid ? 'All hashes verified. Chain is intact.' : 'Hash mismatch detected in chain.');
+            el.innerHTML = `
+                <div class="dag-badge-wrap ${isValid ? 'valid' : 'invalid'}">
+                    <span class="dag-badge-icon">${isValid ? '✅' : '❌'}</span>
+                    <div>
+                        <div class="dag-badge-text">${isValid ? 'DAG Integrity OK' : 'DAG Integrity FAILED'}</div>
+                        <div style="font-size:11px;color:var(--muted);margin-top:3px;">${esc(msg)}</div>
+                    </div>
+                </div>`;
+        } catch {
+            el.innerHTML = `<p class="text-danger" style="font-size:12px;">Failed to verify DAG.</p>`;
+        }
+    }
+
+    /* ── Helpers ───────────────────────────────────────────────── */
+    function esc(s) {
+        return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function fmt(n) {
+        return Number(n).toLocaleString();
+    }
+
+    /* ── Init & refresh ────────────────────────────────────────── */
+    async function refreshAll() {
+        await Promise.all([checkHealth(), loadSessions()]);
+        if (selectedSessionId) await loadTimeline(selectedSessionId, selectedBranch);
+    }
+
+    // Health check every 10 seconds
+    checkHealth();
+    setInterval(checkHealth, 10000);
+
+    // Initial data load
+    loadSessions();
+</script>
+</body>
+</html>
