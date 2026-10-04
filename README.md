@@ -48,7 +48,7 @@ dotnet run --project src/DeterministicProxy.Gateway
 ### 2. Install the Python SDK
 
 ```bash
-pip install steplock
+pip install steplock # this is a work in progress so... wait
 ```
 
 ### 3. Wrap Your Agent Calls
