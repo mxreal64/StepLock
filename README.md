@@ -8,8 +8,6 @@ A sub-millisecond deterministic state proxy and Merkle DAG execution engine buil
 [![.NET 11](https://img.shields.io/badge/.NET-11.0%20%7C%2010.0-purple.svg)](https://dotnet.microsoft.com/)
 [![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen.svg)]()
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![PyPI](https://img.shields.io/badge/pypi-steplock-blue.svg)](https://pypi.org/project/steplock/)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](docker-compose.yml)
 
 [**Quickstart**](#-30-second-quickstart) •
 [**Why StepLock?**](#-why-steplock) •
