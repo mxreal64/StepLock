@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "steplock"
+version = "1.0.0"
+description = "StepLock: Deterministic State Proxy and Content-Addressable Storage for Multi-Step AI Agents"
+readme = "README.md"
+authors = [{ name = "StepLock Team" }]
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+dependencies = [
+    "httpx>=0.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
