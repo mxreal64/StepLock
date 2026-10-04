@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Diagnostics;
 using System.IO.Pipelines;
 using DeterministicProxy.Core.Models;
@@ -17,35 +16,27 @@ public sealed class DuplexStreamingTap
         CancellationToken ct = default)
     {
         var chunks = new List<StreamChunk>();
-        var buffer = ArrayPool<byte>.Shared.Rent(16384);
         var stopwatch = Stopwatch.StartNew();
         int sequence = 0;
 
-        try
+        while (true)
         {
-            int bytesRead;
-            while ((bytesRead = await sourceStream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0)
-            {
-                var deltaMs = stopwatch.ElapsedMilliseconds;
+            var memory = targetWriter.GetMemory(16384);
+            int bytesRead = await sourceStream.ReadAsync(memory, ct).ConfigureAwait(false);
+            if (bytesRead <= 0)
+                break;
 
-                // Capture chunk snapshot (independent copy for storage)
-                var chunkBytes = new byte[bytesRead];
-                buffer.AsSpan(0, bytesRead).CopyTo(chunkBytes);
-                chunks.Add(new StreamChunk(sequence++, deltaMs, chunkBytes));
+            var deltaMs = stopwatch.ElapsedMilliseconds;
 
-                // Direct write into PipeWriter's managed memory
-                var memory = targetWriter.GetMemory(bytesRead);
-                buffer.AsSpan(0, bytesRead).CopyTo(memory.Span);
-                targetWriter.Advance(bytesRead);
+            var chunkBytes = GC.AllocateUninitializedArray<byte>(bytesRead);
+            memory.Span.Slice(0, bytesRead).CopyTo(chunkBytes);
+            chunks.Add(new StreamChunk(sequence++, deltaMs, chunkBytes));
 
-                var flushResult = await targetWriter.FlushAsync(ct);
-                if (flushResult.IsCompleted || flushResult.IsCanceled)
-                    break;
-            }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
+            targetWriter.Advance(bytesRead);
+
+            var flushResult = await targetWriter.FlushAsync(ct).ConfigureAwait(false);
+            if (flushResult.IsCompleted || flushResult.IsCanceled)
+                break;
         }
 
         return chunks;

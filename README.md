@@ -6,7 +6,7 @@
 A sub-millisecond deterministic state proxy and Merkle DAG execution engine built for multi-step AI agent runtimes (**LangGraph**, **Temporal**, **AutoGen**, **CrewAI**, and **Playwright**).
 
 [![.NET 11](https://img.shields.io/badge/.NET-11.0%20%7C%2010.0-purple.svg)](https://dotnet.microsoft.com/)
-[![Tests](https://img.shields.io/badge/tests-37%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen.svg)]()
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![PyPI](https://img.shields.io/badge/pypi-steplock-blue.svg)](https://pypi.org/project/steplock/)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](docker-compose.yml)
@@ -126,8 +126,8 @@ with StepLockSession(session_id="order-support-agent-01", branch_id="main") as s
 │                                                                                          ▼                             │
 │  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │                                     High-Throughput State Persistence (CAS)                                      │  │
-│  │   • L1: In-Memory Ring Buffer & Hot CAS (2.5M ops/s)                                                             │  │
-│  │   • L2: SQLite (WAL Mode) for Merkle DAG & Chunk BLOBs (19k frames/s)                                            │  │
+│  │   • L1: In-Memory Ring Buffer & Hot CAS (1.5M+ ops/s, 0 Alloc)                                                   │  │
+│  │   • L2: SQLite (WAL Mode) for Merkle DAG & Chunk BLOBs (18.5k frames/s)                                          │  │
 │  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┬──────────────────────────────────────────────────────────┘
                                                               │
@@ -145,13 +145,13 @@ Run benchmarks locally: `dotnet run --project tests/DeterministicProxy.Benchmark
 
 | Benchmark Target | Throughput | p50 Latency | p95 Latency | p99 Latency | Alloc / Op |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **In-Memory Store (Write + Hash Lookup)** | **2,544,115 op/s** | **0.20 µs** | 0.50 µs | 1.10 µs | 72 B |
-| **Zero-Copy Streaming Tap (`Pipelines`)** | **337,929 op/s** | **2.30 µs** | 4.20 µs | 9.30 µs | 1.6 KB |
-| **Merkle DAG Hashing (SHA-256 Chaining)** | **143,251 op/s** | **4.90 µs** | 14.30 µs | 29.50 µs | 1.4 KB |
-| **PII & Secret Redaction Engine** | **60,304 op/s** | **14.00 µs** | 30.70 µs | 55.40 µs | 2.0 KB |
-| **Semantic Request Canonicalizer (JSON)** | **17,788 op/s** | **44.30 µs** | 127.90 µs | 218.90 µs | 12.1 KB |
-| **Dynamic TLS Leaf Cert Gen (ECDsa P-256)** | **1,361 op/s** | **446.40 µs** | 2.23 ms | 2.74 ms | 17.5 KB |
-| **SQLite WAL Batch Persistence (50 Frames/Tx)** | **381 op/s** *(19k frames/s)* | **2.48 ms** | 4.24 ms | 5.53 ms | 223.1 KB |
+| **In-Memory Store (Write + Hash Lookup)** | **1,572,278 op/s** | **0.50 µs** | 1.00 µs | 1.90 µs | **0 B (Zero-Alloc)** |
+| **Merkle DAG Hashing (SHA-256 Chaining)** | **300,193 op/s** | **2.30 µs** | 5.10 µs | 14.90 µs | **152 B** |
+| **Zero-Copy Streaming Tap (`Pipelines`)** | **171,343 op/s** | **3.50 µs** | 10.60 µs | 25.40 µs | 1.7 KB |
+| **PII & Secret Redaction Engine** | **91,001 op/s** | **8.60 µs** | 19.70 µs | 42.60 µs | 1.7 KB |
+| **Semantic Request Canonicalizer (JSON)** | **27,432 op/s** | **31.10 µs** | 70.60 µs | 108.30 µs | **1.0 KB** |
+| **Dynamic TLS Leaf Cert Gen (ECDsa P-256)** | **407 op/s** | **2.23 ms** | 4.20 ms | 5.62 ms | 17.8 KB |
+| **SQLite WAL Batch Persistence (50 Frames/Tx)** | **371 op/s** *(18.5k frames/s)* | **2.58 ms** | 4.20 ms | 5.46 ms | **148.1 KB** |
 
 ---
 

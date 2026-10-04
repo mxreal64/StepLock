@@ -1,7 +1,7 @@
+using System.Buffers;
+using System.Collections.Frozen;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using DeterministicProxy.Core.Abstractions;
 
 namespace DeterministicProxy.Core.Canonicalization;
@@ -11,7 +11,7 @@ public sealed class SemanticRequestCanonicalizer : IRequestCanonicalizer
     public static readonly SemanticRequestCanonicalizer Default = new();
 
     // Headers that vary per request and cause false non-determinism
-    private static readonly HashSet<string> IgnoredHeaders = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> IgnoredHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "Date",
         "User-Agent",
@@ -28,24 +28,32 @@ public sealed class SemanticRequestCanonicalizer : IRequestCanonicalizer
         "X-Execution-Mode",
         "X-Virtual-Time",
         "Host"
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     // JSON fields that often contain dynamic nonces or non-deterministic tokens
-    private static readonly HashSet<string> DynamicJsonKeys = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> DynamicJsonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "nonce",
         "client_timestamp",
         "request_id",
         "uuid",
         "client_session_id"
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly byte[] EmptySha256Bytes = SHA256.HashData(ReadOnlySpan<byte>.Empty);
+    private static readonly string EmptySha256Hex = Convert.ToHexStringLower(EmptySha256Bytes);
+
+    [ThreadStatic]
+    private static ArrayBufferWriter<byte>? t_bufferWriter;
+
+    [ThreadStatic]
+    private static Utf8JsonWriter? t_jsonWriter;
 
     public (string NormalizedBodyHash, byte[] CanonicalBytes) CanonicalizeBody(string? contentType, ReadOnlyMemory<byte> rawBody)
     {
         if (rawBody.IsEmpty)
         {
-            var emptyHash = Convert.ToHexString(SHA256.HashData(ReadOnlySpan<byte>.Empty)).ToLowerInvariant();
-            return (emptyHash, Array.Empty<byte>());
+            return (EmptySha256Hex, Array.Empty<byte>());
         }
 
         // If JSON, parse, mask dynamic fields, sort keys deterministically
@@ -53,15 +61,31 @@ public sealed class SemanticRequestCanonicalizer : IRequestCanonicalizer
         {
             try
             {
-                var jsonNode = JsonNode.Parse(rawBody.Span);
-                if (jsonNode != null)
+                using var doc = JsonDocument.Parse(rawBody);
+                var bufferWriter = t_bufferWriter ??= new ArrayBufferWriter<byte>(1024);
+                bufferWriter.Clear();
+
+                var jsonWriter = t_jsonWriter;
+                if (jsonWriter == null)
                 {
-                    MaskDynamicFields(jsonNode);
-                    var canonicalJson = SerializeCanonicalJson(jsonNode);
-                    var canonicalBytes = Encoding.UTF8.GetBytes(canonicalJson);
-                    var hash = Convert.ToHexString(SHA256.HashData(canonicalBytes)).ToLowerInvariant();
-                    return (hash, canonicalBytes);
+                    jsonWriter = t_jsonWriter = new Utf8JsonWriter(bufferWriter, new JsonWriterOptions { Indented = false });
                 }
+                else
+                {
+                    jsonWriter.Reset(bufferWriter);
+                }
+
+                WriteCanonicalElement(doc.RootElement, jsonWriter);
+                jsonWriter.Flush();
+
+                var writtenSpan = bufferWriter.WrittenSpan;
+                var canonicalBytes = writtenSpan.ToArray();
+
+                Span<byte> hashBytes = stackalloc byte[32];
+                SHA256.HashData(writtenSpan, hashBytes);
+                var hash = Convert.ToHexStringLower(hashBytes);
+
+                return (hash, canonicalBytes);
             }
             catch
             {
@@ -69,7 +93,9 @@ public sealed class SemanticRequestCanonicalizer : IRequestCanonicalizer
             }
         }
 
-        var rawHash = Convert.ToHexString(SHA256.HashData(rawBody.Span)).ToLowerInvariant();
+        Span<byte> rawHashBytes = stackalloc byte[32];
+        SHA256.HashData(rawBody.Span, rawHashBytes);
+        var rawHash = Convert.ToHexStringLower(rawHashBytes);
         return (rawHash, rawBody.ToArray());
     }
 
@@ -86,74 +112,88 @@ public sealed class SemanticRequestCanonicalizer : IRequestCanonicalizer
         return new Dictionary<string, string>(result);
     }
 
-    private static void MaskDynamicFields(JsonNode node)
+    private readonly struct FastProp
     {
-        if (node is JsonObject obj)
+        public readonly string Name;
+        public readonly JsonElement Value;
+
+        public FastProp(string name, JsonElement value)
         {
-            foreach (var prop in obj.ToList())
-            {
-                if (DynamicJsonKeys.Contains(prop.Key))
-                {
-                    obj[prop.Key] = "[VIRTUAL_DETERMINISTIC_MASKED]";
-                }
-                else if (prop.Value != null)
-                {
-                    MaskDynamicFields(prop.Value);
-                }
-            }
-        }
-        else if (node is JsonArray arr)
-        {
-            foreach (var item in arr)
-            {
-                if (item != null)
-                {
-                    MaskDynamicFields(item);
-                }
-            }
+            Name = name;
+            Value = value;
         }
     }
 
-    private static string SerializeCanonicalJson(JsonNode node)
+    private static void WriteCanonicalElement(JsonElement element, Utf8JsonWriter writer)
     {
-        // Deterministic sorted key JSON serializer
-        using var stream = new MemoryStream();
-        using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false });
-        WriteSortedJson(node, writer);
-        writer.Flush();
-        return Encoding.UTF8.GetString(stream.ToArray());
-    }
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+            {
+                writer.WriteStartObject();
 
-    private static void WriteSortedJson(JsonNode node, Utf8JsonWriter writer)
-    {
-        if (node is JsonObject obj)
-        {
-            writer.WriteStartObject();
-            foreach (var prop in obj.OrderBy(k => k.Key, StringComparer.Ordinal))
-            {
-                writer.WritePropertyName(prop.Key);
-                if (prop.Value == null)
-                    writer.WriteNullValue();
-                else
-                    WriteSortedJson(prop.Value, writer);
+                var rented = ArrayPool<FastProp>.Shared.Rent(16);
+                int count = 0;
+                try
+                {
+                    foreach (var prop in element.EnumerateObject())
+                    {
+                        if (count == rented.Length)
+                        {
+                            var nextRented = ArrayPool<FastProp>.Shared.Rent(rented.Length * 2);
+                            rented.AsSpan(0, count).CopyTo(nextRented);
+                            ArrayPool<FastProp>.Shared.Return(rented);
+                            rented = nextRented;
+                        }
+                        rented[count++] = new FastProp(prop.Name, prop.Value);
+                    }
+
+                    if (count > 0)
+                    {
+                        var activeSlice = rented.AsSpan(0, count);
+                        activeSlice.Sort(static (a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+
+                        for (int i = 0; i < activeSlice.Length; i++)
+                        {
+                            ref readonly var prop = ref activeSlice[i];
+                            writer.WritePropertyName(prop.Name);
+
+                            if (DynamicJsonKeys.Contains(prop.Name))
+                            {
+                                writer.WriteStringValue("[VIRTUAL_DETERMINISTIC_MASKED]");
+                            }
+                            else
+                            {
+                                WriteCanonicalElement(prop.Value, writer);
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    ArrayPool<FastProp>.Shared.Return(rented);
+                }
+
+                writer.WriteEndObject();
+                break;
             }
-            writer.WriteEndObject();
-        }
-        else if (node is JsonArray arr)
-        {
-            writer.WriteStartArray();
-            foreach (var item in arr)
+
+            case JsonValueKind.Array:
             {
-                if (item == null)
-                    writer.WriteNullValue();
-                else
-                    WriteSortedJson(item, writer);
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteCanonicalElement(item, writer);
+                }
+                writer.WriteEndArray();
+                break;
             }
-            writer.WriteEndArray();
-        }
-        else if (node is JsonValue val)
-        {
-            val.WriteTo(writer);
+
+            default:
+            {
+                element.WriteTo(writer);
+                break;
+            }
         }
     }
 }

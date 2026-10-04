@@ -1,7 +1,6 @@
 using System.Data;
 using System.Text.Json;
 using DeterministicProxy.Core.Abstractions;
-using DeterministicProxy.Core.Cryptography;
 using DeterministicProxy.Core.Models;
 using Microsoft.Data.Sqlite;
 
@@ -9,6 +8,8 @@ namespace DeterministicProxy.Storage.Sqlite;
 
 public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
 {
+    private const string SelectFrameColumns = "session_id, branch_id, step_index, step_id, parent_step_hash, frame_hash, http_method, target_uri, request_headers_json, request_body_hash, request_body_canonical, response_status, response_headers_json, chunks_json, ws_frames_json, side_effect_type, duration_ms, ttft_ms, created_at_utc";
+
     private readonly string _connectionString;
     private readonly SqliteConnection _connection;
     private readonly SqliteConnection _readConnection;
@@ -34,7 +35,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
 
             // High performance SQLite tuning (WAL mode)
             using var walCmd = _connection.CreateCommand();
-            walCmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;";
+            walCmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -64000; PRAGMA mmap_size = 268435456; PRAGMA busy_timeout = 5000;";
             await walCmd.ExecuteNonQueryAsync(ct);
 
             using var cmd = _connection.CreateCommand();
@@ -77,7 +78,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
 
             await _readConnection.OpenAsync(ct);
             using var readWalCmd = _readConnection.CreateCommand();
-            readWalCmd.CommandText = "PRAGMA synchronous = NORMAL;";
+            readWalCmd.CommandText = "PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -64000; PRAGMA mmap_size = 268435456; PRAGMA busy_timeout = 5000;";
             await readWalCmd.ExecuteNonQueryAsync(ct);
 
             _initialized = true;
@@ -96,7 +97,8 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = GetUpsertFrameSql();
-            PopulateFrameParameters(cmd, frame);
+            var parameters = CreateFrameParameters(cmd);
+            BindFrameParameters(parameters, frame);
             await cmd.ExecuteNonQueryAsync(ct);
         }
         finally
@@ -117,11 +119,11 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
             using var cmd = _connection.CreateCommand();
             cmd.Transaction = transaction;
             cmd.CommandText = GetUpsertFrameSql();
+            var parameters = CreateFrameParameters(cmd);
 
-            foreach (var frame in frames)
+            for (int i = 0; i < frames.Count; i++)
             {
-                cmd.Parameters.Clear();
-                PopulateFrameParameters(cmd, frame);
+                BindFrameParameters(parameters, frames[i]);
                 await cmd.ExecuteNonQueryAsync(ct);
             }
 
@@ -137,7 +139,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
     {
         await InitializeAsync(ct);
         using var cmd = _readConnection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM execution_frames WHERE session_id = @session_id AND branch_id = @branch_id AND step_index = @step_index LIMIT 1;";
+        cmd.CommandText = $"SELECT {SelectFrameColumns} FROM execution_frames WHERE session_id = @session_id AND branch_id = @branch_id AND step_index = @step_index LIMIT 1;";
         cmd.Parameters.AddWithValue("@session_id", sessionId);
         cmd.Parameters.AddWithValue("@branch_id", branchId);
         cmd.Parameters.AddWithValue("@step_index", stepIndex);
@@ -154,7 +156,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
     {
         await InitializeAsync(ct);
         using var cmd = _readConnection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM execution_frames WHERE frame_hash = @frame_hash LIMIT 1;";
+        cmd.CommandText = $"SELECT {SelectFrameColumns} FROM execution_frames WHERE frame_hash = @frame_hash LIMIT 1;";
         cmd.Parameters.AddWithValue("@frame_hash", frameHash);
 
         using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -181,7 +183,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
     {
         await InitializeAsync(ct);
         using var cmd = _readConnection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM execution_frames WHERE session_id = @session_id AND branch_id = @branch_id ORDER BY step_index ASC;";
+        cmd.CommandText = $"SELECT {SelectFrameColumns} FROM execution_frames WHERE session_id = @session_id AND branch_id = @branch_id ORDER BY step_index ASC;";
         cmd.Parameters.AddWithValue("@session_id", sessionId);
         cmd.Parameters.AddWithValue("@branch_id", branchId);
 
@@ -209,7 +211,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
                 reader.GetString(1),
                 reader.GetString(2),
                 DateTimeOffset.Parse(reader.GetString(3)),
-                JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(4)) ?? new()
+                JsonSerializer.Deserialize(reader.GetString(4), DeterministicProxyJsonContext.Default.DictionaryStringString) ?? new()
             );
         }
         return null;
@@ -230,7 +232,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
                 reader.GetString(1),
                 reader.GetString(2),
                 DateTimeOffset.Parse(reader.GetString(3)),
-                JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(4)) ?? new()
+                JsonSerializer.Deserialize(reader.GetString(4), DeterministicProxyJsonContext.Default.DictionaryStringString) ?? new()
             ));
         }
         return sessions;
@@ -255,7 +257,7 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
             cmd.Parameters.AddWithValue("@root_branch_id", session.RootBranchId);
             cmd.Parameters.AddWithValue("@active_branch_id", session.ActiveBranchId);
             cmd.Parameters.AddWithValue("@created_at_utc", session.CreatedAtUtc.ToString("O"));
-            cmd.Parameters.AddWithValue("@metadata_json", JsonSerializer.Serialize(session.Metadata));
+            cmd.Parameters.AddWithValue("@metadata_json", JsonSerializer.Serialize(session.Metadata, DeterministicProxyJsonContext.Default.DictionaryStringString));
 
             await cmd.ExecuteNonQueryAsync(ct);
         }
@@ -269,66 +271,13 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
     {
         var baseFrames = await GetExecutionHistoryAsync(sessionId, baseBranchId, ct);
         var targetFrames = await GetExecutionHistoryAsync(sessionId, targetBranchId, ct);
-
-        int maxLen = Math.Max(baseFrames.Count, targetFrames.Count);
-        int? divergenceStep = null;
-        int identicalCount = 0;
-        var stepDiffs = new List<StepDiff>();
-
-        for (int i = 0; i < maxLen; i++)
-        {
-            var baseF = i < baseFrames.Count ? baseFrames[i] : null;
-            var targetF = i < targetFrames.Count ? targetFrames[i] : null;
-
-            bool isMatch = baseF != null && targetF != null && baseF.FrameHash == targetF.FrameHash;
-            if (isMatch)
-            {
-                identicalCount++;
-            }
-            else if (divergenceStep == null)
-            {
-                divergenceStep = i;
-            }
-
-            stepDiffs.Add(new StepDiff(
-                StepIndex: i,
-                BaseFrameHash: baseF?.FrameHash,
-                TargetFrameHash: targetF?.FrameHash,
-                IsMatch: isMatch,
-                BaseTargetUri: baseF?.TargetUri,
-                TargetTargetUri: targetF?.TargetUri,
-                StatusCodeChanged: baseF?.ResponseStatusCode != targetF?.ResponseStatusCode
-            ));
-        }
-
-        return new BranchDiff(sessionId, baseBranchId, targetBranchId, divergenceStep, identicalCount, stepDiffs);
+        return BranchDiffer.Compute(sessionId, baseBranchId, targetBranchId, baseFrames, targetFrames);
     }
 
     public async ValueTask<bool> VerifyDagIntegrityAsync(string sessionId, string branchId, CancellationToken ct = default)
     {
         var frames = await GetExecutionHistoryAsync(sessionId, branchId, ct);
-        string? expectedParentHash = null;
-
-        for (int i = 0; i < frames.Count; i++)
-        {
-            var frame = frames[i];
-            if (frame.ParentStepHash != expectedParentHash)
-                return false;
-
-            var computedHash = FrameHasher.Instance.ComputeFrameHash(
-                frame.ParentStepHash,
-                frame.HttpMethod,
-                frame.TargetUri,
-                frame.RequestBodyHash,
-                frame.StepIndex);
-
-            if (computedHash != frame.FrameHash)
-                return false;
-
-            expectedParentHash = frame.FrameHash;
-        }
-
-        return true;
+        return DagVerifier.Verify(frames);
     }
 
     private static string GetUpsertFrameSql() => @"
@@ -362,51 +311,77 @@ public sealed class SqliteExecutionStore : IExecutionStore, IAsyncDisposable
             created_at_utc = excluded.created_at_utc;
     ";
 
-    private static void PopulateFrameParameters(SqliteCommand cmd, ExecutionFrame frame)
+    private static SqliteParameter[] CreateFrameParameters(SqliteCommand cmd)
     {
-        cmd.Parameters.AddWithValue("@frame_hash", frame.FrameHash);
-        cmd.Parameters.AddWithValue("@session_id", frame.SessionId);
-        cmd.Parameters.AddWithValue("@branch_id", frame.BranchId);
-        cmd.Parameters.AddWithValue("@step_index", frame.StepIndex);
-        cmd.Parameters.AddWithValue("@step_id", frame.StepId);
-        cmd.Parameters.AddWithValue("@parent_step_hash", (object?)frame.ParentStepHash ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@http_method", frame.HttpMethod);
-        cmd.Parameters.AddWithValue("@target_uri", frame.TargetUri);
-        cmd.Parameters.AddWithValue("@request_headers_json", JsonSerializer.Serialize(frame.RequestHeaders));
-        cmd.Parameters.AddWithValue("@request_body_hash", frame.RequestBodyHash);
-        cmd.Parameters.AddWithValue("@request_body_canonical", (object?)frame.RequestBodyCanonical ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@response_status", frame.ResponseStatusCode);
-        cmd.Parameters.AddWithValue("@response_headers_json", JsonSerializer.Serialize(frame.ResponseHeaders));
-        cmd.Parameters.AddWithValue("@chunks_json", JsonSerializer.Serialize(frame.Chunks));
-        cmd.Parameters.AddWithValue("@ws_frames_json", frame.WebSocketFrames is null ? (object)DBNull.Value : JsonSerializer.Serialize(frame.WebSocketFrames));
-        cmd.Parameters.AddWithValue("@side_effect_type", (int)frame.SideEffectType);
-        cmd.Parameters.AddWithValue("@duration_ms", frame.DurationMs);
-        cmd.Parameters.AddWithValue("@ttft_ms", (object?)frame.TimeToFirstTokenMs ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@created_at_utc", frame.CreatedAtUtc.ToString("O"));
+        return new[]
+        {
+            cmd.Parameters.Add("@frame_hash", SqliteType.Text),
+            cmd.Parameters.Add("@session_id", SqliteType.Text),
+            cmd.Parameters.Add("@branch_id", SqliteType.Text),
+            cmd.Parameters.Add("@step_index", SqliteType.Integer),
+            cmd.Parameters.Add("@step_id", SqliteType.Text),
+            cmd.Parameters.Add("@parent_step_hash", SqliteType.Text),
+            cmd.Parameters.Add("@http_method", SqliteType.Text),
+            cmd.Parameters.Add("@target_uri", SqliteType.Text),
+            cmd.Parameters.Add("@request_headers_json", SqliteType.Text),
+            cmd.Parameters.Add("@request_body_hash", SqliteType.Text),
+            cmd.Parameters.Add("@request_body_canonical", SqliteType.Blob),
+            cmd.Parameters.Add("@response_status", SqliteType.Integer),
+            cmd.Parameters.Add("@response_headers_json", SqliteType.Text),
+            cmd.Parameters.Add("@chunks_json", SqliteType.Text),
+            cmd.Parameters.Add("@ws_frames_json", SqliteType.Text),
+            cmd.Parameters.Add("@side_effect_type", SqliteType.Integer),
+            cmd.Parameters.Add("@duration_ms", SqliteType.Integer),
+            cmd.Parameters.Add("@ttft_ms", SqliteType.Integer),
+            cmd.Parameters.Add("@created_at_utc", SqliteType.Text)
+        };
+    }
+
+    private static void BindFrameParameters(SqliteParameter[] parameters, ExecutionFrame frame)
+    {
+        parameters[0].Value = frame.FrameHash;
+        parameters[1].Value = frame.SessionId;
+        parameters[2].Value = frame.BranchId;
+        parameters[3].Value = frame.StepIndex;
+        parameters[4].Value = frame.StepId;
+        parameters[5].Value = (object?)frame.ParentStepHash ?? DBNull.Value;
+        parameters[6].Value = frame.HttpMethod;
+        parameters[7].Value = frame.TargetUri;
+        parameters[8].Value = JsonSerializer.Serialize(frame.RequestHeaders, DeterministicProxyJsonContext.Default.DictionaryStringString);
+        parameters[9].Value = frame.RequestBodyHash;
+        parameters[10].Value = (object?)frame.RequestBodyCanonical ?? DBNull.Value;
+        parameters[11].Value = frame.ResponseStatusCode;
+        parameters[12].Value = JsonSerializer.Serialize(frame.ResponseHeaders, DeterministicProxyJsonContext.Default.DictionaryStringString);
+        parameters[13].Value = JsonSerializer.Serialize(frame.Chunks, DeterministicProxyJsonContext.Default.ListStreamChunk);
+        parameters[14].Value = frame.WebSocketFrames is null ? (object)DBNull.Value : JsonSerializer.Serialize(frame.WebSocketFrames, DeterministicProxyJsonContext.Default.ListWebSocketCapturedFrame);
+        parameters[15].Value = (int)frame.SideEffectType;
+        parameters[16].Value = frame.DurationMs;
+        parameters[17].Value = (object?)frame.TimeToFirstTokenMs ?? DBNull.Value;
+        parameters[18].Value = frame.CreatedAtUtc.ToString("O");
     }
 
     private static ExecutionFrame MapFrame(SqliteDataReader reader)
     {
         return new ExecutionFrame(
-            SessionId: reader.GetString(reader.GetOrdinal("session_id")),
-            BranchId: reader.GetString(reader.GetOrdinal("branch_id")),
-            StepIndex: reader.GetInt32(reader.GetOrdinal("step_index")),
-            StepId: reader.GetString(reader.GetOrdinal("step_id")),
-            ParentStepHash: reader.IsDBNull(reader.GetOrdinal("parent_step_hash")) ? null : reader.GetString(reader.GetOrdinal("parent_step_hash")),
-            FrameHash: reader.GetString(reader.GetOrdinal("frame_hash")),
-            HttpMethod: reader.GetString(reader.GetOrdinal("http_method")),
-            TargetUri: reader.GetString(reader.GetOrdinal("target_uri")),
-            RequestHeaders: JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(reader.GetOrdinal("request_headers_json"))) ?? new(),
-            RequestBodyHash: reader.GetString(reader.GetOrdinal("request_body_hash")),
-            RequestBodyCanonical: reader.IsDBNull(reader.GetOrdinal("request_body_canonical")) ? null : (byte[])reader["request_body_canonical"],
-            ResponseStatusCode: reader.GetInt32(reader.GetOrdinal("response_status")),
-            ResponseHeaders: JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(reader.GetOrdinal("response_headers_json"))) ?? new(),
-            Chunks: JsonSerializer.Deserialize<List<StreamChunk>>(reader.GetString(reader.GetOrdinal("chunks_json"))) ?? new(),
-            WebSocketFrames: reader.IsDBNull(reader.GetOrdinal("ws_frames_json")) ? null : JsonSerializer.Deserialize<List<WebSocketCapturedFrame>>(reader.GetString(reader.GetOrdinal("ws_frames_json"))),
-            SideEffectType: (SideEffectType)reader.GetInt32(reader.GetOrdinal("side_effect_type")),
-            DurationMs: reader.GetInt64(reader.GetOrdinal("duration_ms")),
-            TimeToFirstTokenMs: reader.IsDBNull(reader.GetOrdinal("ttft_ms")) ? null : reader.GetInt64(reader.GetOrdinal("ttft_ms")),
-            CreatedAtUtc: DateTimeOffset.Parse(reader.GetString(reader.GetOrdinal("created_at_utc")))
+            SessionId: reader.GetString(0),
+            BranchId: reader.GetString(1),
+            StepIndex: reader.GetInt32(2),
+            StepId: reader.GetString(3),
+            ParentStepHash: reader.IsDBNull(4) ? null : reader.GetString(4),
+            FrameHash: reader.GetString(5),
+            HttpMethod: reader.GetString(6),
+            TargetUri: reader.GetString(7),
+            RequestHeaders: JsonSerializer.Deserialize(reader.GetString(8), DeterministicProxyJsonContext.Default.DictionaryStringString) ?? new(),
+            RequestBodyHash: reader.GetString(9),
+            RequestBodyCanonical: reader.IsDBNull(10) ? null : (byte[])reader[10],
+            ResponseStatusCode: reader.GetInt32(11),
+            ResponseHeaders: JsonSerializer.Deserialize(reader.GetString(12), DeterministicProxyJsonContext.Default.DictionaryStringString) ?? new(),
+            Chunks: JsonSerializer.Deserialize(reader.GetString(13), DeterministicProxyJsonContext.Default.ListStreamChunk) ?? new(),
+            WebSocketFrames: reader.IsDBNull(14) ? null : JsonSerializer.Deserialize(reader.GetString(14), DeterministicProxyJsonContext.Default.ListWebSocketCapturedFrame),
+            SideEffectType: (SideEffectType)reader.GetInt32(15),
+            DurationMs: reader.GetInt64(16),
+            TimeToFirstTokenMs: reader.IsDBNull(17) ? null : reader.GetInt64(17),
+            CreatedAtUtc: DateTimeOffset.Parse(reader.GetString(18))
         );
     }
 

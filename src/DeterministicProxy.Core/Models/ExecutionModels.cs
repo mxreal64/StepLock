@@ -107,3 +107,22 @@ public interface IUsageMeteringService
     void RecordStep(string tenantId, bool isReplay, long bytesTransferred, long durationMs);
     TenantUsageMetrics GetUsage(string tenantId);
 }
+
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.Unspecified, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(StreamChunk))]
+[JsonSerializable(typeof(List<StreamChunk>))]
+[JsonSerializable(typeof(WebSocketCapturedFrame))]
+[JsonSerializable(typeof(List<WebSocketCapturedFrame>))]
+[JsonSerializable(typeof(ExecutionFrame))]
+[JsonSerializable(typeof(List<ExecutionFrame>))]
+[JsonSerializable(typeof(ExecutionSession))]
+[JsonSerializable(typeof(List<ExecutionSession>))]
+[JsonSerializable(typeof(BranchDiff))]
+[JsonSerializable(typeof(StepDiff))]
+[JsonSerializable(typeof(List<StepDiff>))]
+[JsonSerializable(typeof(TenantUsageMetrics))]
+[JsonSerializable(typeof(Dictionary<string, string>))]
+public sealed partial class DeterministicProxyJsonContext : JsonSerializerContext
+{
+}
+

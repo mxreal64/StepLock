@@ -1,38 +1,52 @@
 using System.Collections.Concurrent;
 using DeterministicProxy.Core.Abstractions;
-using DeterministicProxy.Core.Cryptography;
 using DeterministicProxy.Core.Models;
 
 namespace DeterministicProxy.Storage.Memory;
 
 public sealed class MemoryExecutionStore : IExecutionStore
 {
-    private readonly ConcurrentDictionary<string, ExecutionFrame> _framesByHash = new();
-    private readonly ConcurrentDictionary<string, (SortedList<int, ExecutionFrame> Frames, ReaderWriterLockSlim Lock)> _branchFrames = new();
-    private readonly ConcurrentDictionary<string, ExecutionSession> _sessions = new();
-
-    private static string GetBranchKey(string sessionId, string branchId) => $"{sessionId}:{branchId}";
-
-    private (SortedList<int, ExecutionFrame> Frames, ReaderWriterLockSlim Lock) GetOrCreateBranch(string key)
+    private readonly struct BranchKey : IEquatable<BranchKey>
     {
-        return _branchFrames.GetOrAdd(key, _ => (new SortedList<int, ExecutionFrame>(), new ReaderWriterLockSlim()));
+        public readonly string SessionId;
+        public readonly string BranchId;
+
+        public BranchKey(string sessionId, string branchId)
+        {
+            SessionId = sessionId;
+            BranchId = branchId;
+        }
+
+        public bool Equals(BranchKey other) =>
+            string.Equals(SessionId, other.SessionId, StringComparison.Ordinal) &&
+            string.Equals(BranchId, other.BranchId, StringComparison.Ordinal);
+
+        public override bool Equals(object? obj) => obj is BranchKey other && Equals(other);
+
+        public override int GetHashCode() =>
+            HashCode.Combine(
+                StringComparer.Ordinal.GetHashCode(SessionId),
+                StringComparer.Ordinal.GetHashCode(BranchId));
+    }
+
+    private readonly ConcurrentDictionary<string, ExecutionFrame> _framesByHash = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<BranchKey, BranchState> _branchFrames = new();
+    private readonly ConcurrentDictionary<string, ExecutionSession> _sessions = new(StringComparer.Ordinal);
+
+    private BranchState GetOrCreateBranch(string sessionId, string branchId)
+    {
+        return _branchFrames.GetOrAdd(new BranchKey(sessionId, branchId), static _ => new BranchState());
     }
 
     public ValueTask SaveFrameAsync(ExecutionFrame frame, CancellationToken ct = default)
     {
         _framesByHash[frame.FrameHash] = frame;
+        var branch = GetOrCreateBranch(frame.SessionId, frame.BranchId);
 
-        var key = GetBranchKey(frame.SessionId, frame.BranchId);
-        var branch = GetOrCreateBranch(key);
-
-        branch.Lock.EnterWriteLock();
-        try
+        lock (branch.Gate)
         {
-            branch.Frames[frame.StepIndex] = frame;
-        }
-        finally
-        {
-            branch.Lock.ExitWriteLock();
+            branch.FramesByIndex[frame.StepIndex] = frame;
+            branch.LatestHash = frame.FrameHash;
         }
 
         return ValueTask.CompletedTask;
@@ -40,21 +54,16 @@ public sealed class MemoryExecutionStore : IExecutionStore
 
     public ValueTask SaveFramesBatchAsync(IReadOnlyList<ExecutionFrame> frames, CancellationToken ct = default)
     {
-        foreach (var frame in frames)
+        for (int i = 0; i < frames.Count; i++)
         {
+            var frame = frames[i];
             _framesByHash[frame.FrameHash] = frame;
+            var branch = GetOrCreateBranch(frame.SessionId, frame.BranchId);
 
-            var key = GetBranchKey(frame.SessionId, frame.BranchId);
-            var branch = GetOrCreateBranch(key);
-
-            branch.Lock.EnterWriteLock();
-            try
+            lock (branch.Gate)
             {
-                branch.Frames[frame.StepIndex] = frame;
-            }
-            finally
-            {
-                branch.Lock.ExitWriteLock();
+                branch.FramesByIndex[frame.StepIndex] = frame;
+                branch.LatestHash = frame.FrameHash;
             }
         }
 
@@ -63,20 +72,14 @@ public sealed class MemoryExecutionStore : IExecutionStore
 
     public ValueTask<ExecutionFrame?> GetFrameByStepIndexAsync(string sessionId, string branchId, int stepIndex, CancellationToken ct = default)
     {
-        var key = GetBranchKey(sessionId, branchId);
-        if (_branchFrames.TryGetValue(key, out var branch))
+        if (_branchFrames.TryGetValue(new BranchKey(sessionId, branchId), out var branch))
         {
-            branch.Lock.EnterReadLock();
-            try
+            lock (branch.Gate)
             {
-                if (branch.Frames.TryGetValue(stepIndex, out var frame))
+                if (branch.FramesByIndex.TryGetValue(stepIndex, out var frame))
                 {
                     return ValueTask.FromResult<ExecutionFrame?>(frame);
                 }
-            }
-            finally
-            {
-                branch.Lock.ExitReadLock();
             }
         }
         return ValueTask.FromResult<ExecutionFrame?>(null);
@@ -90,39 +93,25 @@ public sealed class MemoryExecutionStore : IExecutionStore
 
     public ValueTask<string?> GetLatestStepHashAsync(string sessionId, string branchId, CancellationToken ct = default)
     {
-        var key = GetBranchKey(sessionId, branchId);
-        if (_branchFrames.TryGetValue(key, out var branch))
+        if (_branchFrames.TryGetValue(new BranchKey(sessionId, branchId), out var branch))
         {
-            branch.Lock.EnterReadLock();
-            try
-            {
-                if (branch.Frames.Count > 0)
-                {
-                    var last = branch.Frames.Values[branch.Frames.Count - 1];
-                    return ValueTask.FromResult<string?>(last.FrameHash);
-                }
-            }
-            finally
-            {
-                branch.Lock.ExitReadLock();
-            }
+            return ValueTask.FromResult(branch.LatestHash);
         }
         return ValueTask.FromResult<string?>(null);
     }
 
     public ValueTask<IReadOnlyList<ExecutionFrame>> GetExecutionHistoryAsync(string sessionId, string branchId, CancellationToken ct = default)
     {
-        var key = GetBranchKey(sessionId, branchId);
-        if (_branchFrames.TryGetValue(key, out var branch))
+        if (_branchFrames.TryGetValue(new BranchKey(sessionId, branchId), out var branch))
         {
-            branch.Lock.EnterReadLock();
-            try
+            lock (branch.Gate)
             {
-                return ValueTask.FromResult<IReadOnlyList<ExecutionFrame>>(branch.Frames.Values.ToList());
-            }
-            finally
-            {
-                branch.Lock.ExitReadLock();
+                var list = new List<ExecutionFrame>(branch.FramesByIndex.Count);
+                foreach (var pair in branch.FramesByIndex.OrderBy(static k => k.Key))
+                {
+                    list.Add(pair.Value);
+                }
+                return ValueTask.FromResult<IReadOnlyList<ExecutionFrame>>(list);
             }
         }
         return ValueTask.FromResult<IReadOnlyList<ExecutionFrame>>(Array.Empty<ExecutionFrame>());
@@ -149,65 +138,19 @@ public sealed class MemoryExecutionStore : IExecutionStore
     {
         var baseFrames = await GetExecutionHistoryAsync(sessionId, baseBranchId, ct);
         var targetFrames = await GetExecutionHistoryAsync(sessionId, targetBranchId, ct);
-
-        int maxLen = Math.Max(baseFrames.Count, targetFrames.Count);
-        int? divergenceStep = null;
-        int identicalCount = 0;
-        var stepDiffs = new List<StepDiff>();
-
-        for (int i = 0; i < maxLen; i++)
-        {
-            var baseF = i < baseFrames.Count ? baseFrames[i] : null;
-            var targetF = i < targetFrames.Count ? targetFrames[i] : null;
-
-            bool isMatch = baseF != null && targetF != null && baseF.FrameHash == targetF.FrameHash;
-            if (isMatch)
-            {
-                identicalCount++;
-            }
-            else if (divergenceStep == null)
-            {
-                divergenceStep = i;
-            }
-
-            stepDiffs.Add(new StepDiff(
-                StepIndex: i,
-                BaseFrameHash: baseF?.FrameHash,
-                TargetFrameHash: targetF?.FrameHash,
-                IsMatch: isMatch,
-                BaseTargetUri: baseF?.TargetUri,
-                TargetTargetUri: targetF?.TargetUri,
-                StatusCodeChanged: baseF?.ResponseStatusCode != targetF?.ResponseStatusCode
-            ));
-        }
-
-        return new BranchDiff(sessionId, baseBranchId, targetBranchId, divergenceStep, identicalCount, stepDiffs);
+        return BranchDiffer.Compute(sessionId, baseBranchId, targetBranchId, baseFrames, targetFrames);
     }
 
     public async ValueTask<bool> VerifyDagIntegrityAsync(string sessionId, string branchId, CancellationToken ct = default)
     {
         var frames = await GetExecutionHistoryAsync(sessionId, branchId, ct);
-        string? expectedParentHash = null;
+        return DagVerifier.Verify(frames);
+    }
 
-        for (int i = 0; i < frames.Count; i++)
-        {
-            var frame = frames[i];
-            if (frame.ParentStepHash != expectedParentHash)
-                return false;
-
-            var computedHash = FrameHasher.Instance.ComputeFrameHash(
-                frame.ParentStepHash,
-                frame.HttpMethod,
-                frame.TargetUri,
-                frame.RequestBodyHash,
-                frame.StepIndex);
-
-            if (computedHash != frame.FrameHash)
-                return false;
-
-            expectedParentHash = frame.FrameHash;
-        }
-
-        return true;
+    private sealed class BranchState
+    {
+        public readonly object Gate = new();
+        public readonly Dictionary<int, ExecutionFrame> FramesByIndex = new();
+        public volatile string? LatestHash;
     }
 }

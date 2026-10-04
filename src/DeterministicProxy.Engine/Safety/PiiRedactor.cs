@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace DeterministicProxy.Engine.Safety;
@@ -12,46 +13,26 @@ public interface IPiiRedactor
 /// High-performance Regex-based PII & Secret Redaction Engine
 /// Masks OpenAI keys, Anthropic keys, AWS credentials, Credit Cards, SSNs, and Bearer tokens.
 /// </summary>
-public sealed class EnterprisePiiRedactor : IPiiRedactor
+public sealed partial class EnterprisePiiRedactor : IPiiRedactor
 {
     public static readonly EnterprisePiiRedactor Instance = new();
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(200);
 
-    private static readonly Regex[] RedactionRules = new[]
+    private static readonly MatchEvaluator Evaluator = static match =>
     {
-        // API Keys (OpenAI, Anthropic, Stripe, AWS)
-        new Regex(@"(sk-[a-zA-Z0-9_-]{20,})", RegexOptions.Compiled, RegexTimeout),
-        new Regex(@"(sk-ant-[a-zA-Z0-9_-]{20,})", RegexOptions.Compiled, RegexTimeout),
-        new Regex(@"(rk_live_[a-zA-Z0-9]{24,})", RegexOptions.Compiled, RegexTimeout),
-        new Regex(@"(AKIA[0-9A-Z]{16})", RegexOptions.Compiled, RegexTimeout),
-        // Bearer Tokens (replaces token after 'Bearer ' while preserving 'Bearer ')
-        new Regex(@"(?<=Bearer\s)[a-zA-Z0-9_\-\.]{20,}", RegexOptions.Compiled | RegexOptions.IgnoreCase, RegexTimeout),
-        // Credit Card Numbers
-        new Regex(@"\b(?:\d{4}[ -]?){3}\d{4}\b", RegexOptions.Compiled, RegexTimeout),
-        // US Social Security Numbers
-        new Regex(@"\b\d{3}-\d{2}-\d{4}\b", RegexOptions.Compiled, RegexTimeout),
-        // Passwords & Secrets in JSON fields
-        new Regex(@"""(password|secret|access_token|api_key)""\s*:\s*""([^""]+)""", RegexOptions.Compiled | RegexOptions.IgnoreCase, RegexTimeout)
+        if (match.Value.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return "Bearer [REDACTED_SECRET]";
+        return "[REDACTED_SECRET]";
     };
+
+    [GeneratedRegex(@"""(password|secret|access_token|api_key)""\s*:\s*""([^""]+)""|sk-[a-zA-Z0-9_-]{20,}|rk_live_[a-zA-Z0-9]{24,}|AKIA[0-9A-Z]{16}|\b(?:\d{4}[ -]?){3}\d{4}\b|\b\d{3}-\d{2}-\d{4}\b|Bearer\s+[a-zA-Z0-9_\-\.]{20,}", RegexOptions.CultureInvariant)]
+    private static partial Regex UnifiedSecretsRegex();
 
     public string Redact(string input)
     {
         if (string.IsNullOrWhiteSpace(input))
             return input;
 
-        var result = input;
-        foreach (var rule in RedactionRules)
-        {
-            try
-            {
-                result = rule.Replace(result, "[REDACTED_SECRET]");
-            }
-            catch (RegexMatchTimeoutException)
-            {
-                // Safety guard against pathological regex inputs
-            }
-        }
-        return result;
+        return UnifiedSecretsRegex().Replace(input, Evaluator);
     }
 
     public byte[] Redact(byte[] input)
@@ -59,8 +40,11 @@ public sealed class EnterprisePiiRedactor : IPiiRedactor
         if (input == null || input.Length == 0)
             return input ?? Array.Empty<byte>();
 
-        var text = System.Text.Encoding.UTF8.GetString(input);
+        var text = Encoding.UTF8.GetString(input);
         var redacted = Redact(text);
-        return System.Text.Encoding.UTF8.GetBytes(redacted);
+        if (ReferenceEquals(text, redacted) || text == redacted)
+            return input;
+
+        return Encoding.UTF8.GetBytes(redacted);
     }
 }
