@@ -1,0 +1,32 @@
+{
+  "name": "@steplock/sdk",
+  "version": "1.0.0",
+  "description": "StepLock: Deterministic State Proxy and Content-Addressable Storage for Multi-Step AI Agents",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "test": "deno test tests/"
+  },
+  "keywords": [
+    "steplock",
+    "ai",
+    "agents",
+    "deterministic",
+    "replay",
+    "proxy",
+    "merkle",
+    "openai",
+    "anthropic"
+  ],
+  "author": "StepLock Team",
+  "license": "Apache-2.0"
+}

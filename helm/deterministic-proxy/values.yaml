@@ -1,0 +1,33 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/yourorg/deterministic-proxy
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 5000
+
+persistence:
+  enabled: true
+  size: 50Gi
+  storageClass: "gp3" # AWS EBS gp3 or standard for GCP
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+env:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  DatabasePath: "/data/execution_traces.db"

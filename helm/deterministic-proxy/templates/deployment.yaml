@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: deterministic-proxy
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: deterministic-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: deterministic-proxy
+    spec:
+      containers:
+        - name: proxy
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 5000
+              name: http
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "{{ .Values.env.ASPNETCORE_ENVIRONMENT }}"
+            - name: DatabasePath
+              value: "{{ .Values.env.DatabasePath }}"
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data-storage
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: data-storage
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-pvc

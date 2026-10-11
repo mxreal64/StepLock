@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
+    <NoWarn>$(NoWarn);NU1903;NU1510</NoWarn>
+  </PropertyGroup>
+</Project>

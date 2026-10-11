@@ -6,16 +6,18 @@
 A sub-millisecond deterministic state proxy and Merkle DAG execution engine built for multi-step AI agent runtimes (**LangGraph**, **Temporal**, **AutoGen**, **CrewAI**, and **Playwright**).
 
 [![.NET 11](https://img.shields.io/badge/.NET-11.0%20%7C%2010.0-purple.svg)](https://dotnet.microsoft.com/)
-[![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-49%20passing-brightgreen.svg)]()
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python SDK](https://img.shields.io/badge/Python%20SDK-source-green.svg)](sdk/python)
+[![TypeScript SDK](https://img.shields.io/badge/TypeScript%20SDK-source-blue.svg)](sdk/typescript)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](Dockerfile)
 
 [**Quickstart**](#-30-second-quickstart) •
 [**Why StepLock?**](#-why-steplock) •
 [**Architecture**](#-system-architecture) •
 [**Benchmarks**](#-benchmarks) •
 [**Python SDK**](#-python-sdk) •
-[**Enterprise Edition**](#-steplock-enterprise)
-
+[**TypeScript SDK**](#-typescript--javascript-sdk) •
 </div>
 
 ---
@@ -37,18 +39,23 @@ When an AI agent runs an 8-step workflow (e.g. triaging a user, calling tools, e
 ### 1. Launch the StepLock Proxy Gateway
 
 ```bash
-# Using Docker
-docker run -d -p 5000:5000 -v steplock_data:/data steplock/steplock:latest
+# Clone the repository
+git clone https://github.com/mxreal64/steplock.git
+cd steplock
 
-# Or natively via .NET SDK
+# Run natively via .NET SDK
 dotnet run --project src/DeterministicProxy.Gateway
+
+# Or build & run the container locally
+docker build -t steplock:local .
+docker run -d -p 5000:5000 -v steplock_data:/data steplock:local
 ```
 *StepLock is now active at `http://localhost:5000` with the visual dashboard at `http://localhost:5000/dashboard`.*
 
-### 2. Install the Python SDK
+### 2. Install the Python SDK (Local Source)
 
 ```bash
-pip install steplock # this is a work in progress so... wait
+pip install -e sdk/python
 ```
 
 ### 3. Wrap Your Agent Calls
@@ -180,6 +187,61 @@ print("Merkle DAG Integrity Valid:", is_valid)
 
 ---
 
+## TypeScript / JavaScript SDK (`sdk/typescript`)
+
+Full client library for Node.js, Bun, Deno, and browser runtimes (import directly or link from `./sdk/typescript`):
+
+```typescript
+import { StepLockSession, wrapOpenAI, ExecutionMode } from "@steplock/sdk";
+import OpenAI from "openai";
+
+const session = new StepLockSession({
+  sessionId: "agent-eval-001",
+  branchId: "main",
+  executionMode: ExecutionMode.REPLAY,
+  speedMultiplier: 5.0, // 5x playback speed
+  autoAdvance: true
+});
+
+const client = wrapOpenAI(new OpenAI(), session);
+
+// Requests are deterministically proxied with step control headers
+const completion = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Plan a trip to Tokyo" }]
+});
+```
+
+---
+
+## Features
+
+
+```
+                  ┌───────────────────────────────────────────────┐
+                  │                 STEPLOCK CORE                 │
+                  └───────────────────────┬───────────────────────┘
+                                          │
+                  ┌───────────────────────┴───────────────────────┐
+                  ▼                                               ▼
+     [ CORE ENGINE & PERSISTENCE ]                  [ ADVANCED AGENT SUITE ]
+  • Zero-Copy Pipelines SSE Streaming Tap        • Branch Regression Diffing Engine
+  • High-Throughput SQLite WAL Storage           • L3 Cloud CAS Sync (.dpz bundles)
+  • In-Memory Zero-Alloc Ring Buffer Store       • Virtual Timing SSE Replay + Jitter
+  • Dynamic TLS MITM Forward Proxy (CONNECT)     • Side-Effect Mutation Safety Barrier
+  • WebSocket CDP Duplex Interception            • Multi-Tenancy & Usage Quota Management
+  • SHA-256 Merkle DAG Cryptographic Integrity   • Automated PII & Secret Redactor
+```
+
+### Advanced Built-in Capabilities:
+1. **Branch Regression Diffing (`BranchRegressionDiffEngine`)**: Semantic AST and payload comparison across agent branches to detect prompt hallucinations, tool schema drift, and payload mutations.
+2. **L3 Cloud CAS Archival (`.dpz` Packages)**: Export and import complete agent execution traces in compressed, tamper-proof packages with SHA-256 CAS manifests.
+3. **Virtual Timing SSE Stream Replay (`VirtualTimingEngine`)**: Replay streams at arbitrary speeds ($0\times$ instant, $1\times$ real-time, $10\times$ accelerated) with realistic micro-jitter simulation.
+4. **Side-Effect Safety Barrier (`SideEffectBarrier`)**: Intercepts mutating third-party API calls (e.g. Stripe, emails, database mutations) during replays, returning synthetic virtualized responses.
+5. **PII & Secret Redaction (`EnterprisePiiRedactor`)**: High-throughput regex pipeline masking OpenAI keys, Anthropic keys, AWS credentials, credit cards, and Bearer tokens in real time.
+
+---
+
 ## Contributing
 
 Community contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, architecture overview, and PR guidelines.
@@ -188,4 +250,4 @@ Community contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## License
 
-StepLock Community Core is open-source software licensed under the **[Apache License 2.0](LICENSE)**.
+StepLock is free and open-source software licensed under the **[Apache License 2.0](LICENSE)**.

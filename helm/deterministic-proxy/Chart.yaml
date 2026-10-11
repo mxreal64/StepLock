@@ -1,0 +1,11 @@
+apiVersion: v2
+name: deterministic-proxy
+description: Production Helm chart for Deterministic State Proxy (Agent Execution Infrastructure)
+type: application
+version: 1.0.0
+appVersion: "9.0.0"
+keywords:
+  - ai-agents
+  - deterministic-replay
+  - langgraph
+  - state-proxy

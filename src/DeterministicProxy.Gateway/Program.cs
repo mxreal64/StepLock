@@ -4,6 +4,8 @@ using DeterministicProxy.Core.Canonicalization;
 using DeterministicProxy.Core.Cryptography;
 using DeterministicProxy.Core.Metrics;
 using DeterministicProxy.Core.Models;
+using DeterministicProxy.Engine.Archival;
+using DeterministicProxy.Engine.Diffing;
 using DeterministicProxy.Engine.Replay;
 using DeterministicProxy.Engine.Safety;
 using DeterministicProxy.Engine.Tls;
@@ -16,14 +18,18 @@ using DeterministicProxy.Storage.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Register Core Singletons
+// Register Core & Advanced Engine Services
 builder.Services.AddSingleton<IRequestCanonicalizer>(SemanticRequestCanonicalizer.Default);
 builder.Services.AddSingleton<IFrameHasher>(FrameHasher.Instance);
 builder.Services.AddSingleton<ISideEffectClassifier>(SideEffectSafetyBarrier.Default);
 builder.Services.AddSingleton<IReplayEngine>(ReplayEngine.Instance);
+builder.Services.AddSingleton<IVirtualTimingEngine, VirtualTimingEngine>();
+builder.Services.AddSingleton<IBranchRegressionDiffEngine, BranchRegressionDiffEngine>();
+builder.Services.AddSingleton<ICloudStorageProvider, InMemoryCloudStorageProvider>();
+builder.Services.AddSingleton<IL3CloudArchiveService, L3CloudArchiveService>();
 builder.Services.AddSingleton<DynamicCertificateAuthority>();
 
-// Register Commercial Multi-Tenancy & Usage Metering
+// Register Multi-Tenancy & Usage Metering
 builder.Services.AddSingleton<ITenantStore, InMemoryTenantStore>();
 builder.Services.AddSingleton<IUsageMeteringService, UsageMeteringService>();
 
@@ -154,6 +160,21 @@ app.MapPost("/api/sessions/fork", async (ForkRequest request, IExecutionStore st
     });
 });
 
+// Control Plane API: L3 Cloud Archive Export & Import (.dpz bundles)
+app.MapPost("/api/sessions/{sessionId}/archive/export", async (string sessionId, string? branchId, IL3CloudArchiveService archiveService) =>
+{
+    var branch = branchId ?? "main";
+    var manifest = await archiveService.ExportSessionToCloudAsync(sessionId, branch);
+    return Results.Ok(manifest);
+});
+
+app.MapPost("/api/sessions/{sessionId}/archive/import", async (string sessionId, string? branchId, IL3CloudArchiveService archiveService) =>
+{
+    var branch = branchId ?? "main";
+    var count = await archiveService.ImportSessionFromCloudAsync(sessionId, branch);
+    return Results.Ok(new { session_id = sessionId, branch_id = branch, imported_frames = count });
+});
+
 // WebSocket / CDP Proxy Endpoint
 app.Map("/ws/cdp", async (HttpContext context, ILogger<Program> logger) =>
 {
@@ -205,7 +226,7 @@ static void PrintBanner()
     Console.WriteLine(" • Dashboard UI:      http://localhost:5000/dashboard");
     Console.WriteLine(" • Health Probe:      http://localhost:5000/health");
     Console.WriteLine(" • Python SDK:        pip install steplock");
-    Console.WriteLine(" • Open-Core Mode:    Active (Community Core + Enterprise Ready)");
+    Console.WriteLine(" • Distribution:      100% Open Source (All Features Included)");
     Console.WriteLine(" ──────────────────────────────────────────────────────────────────\n");
 }
 
