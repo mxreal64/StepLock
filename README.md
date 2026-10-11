@@ -180,33 +180,6 @@ print("Merkle DAG Integrity Valid:", is_valid)
 
 ---
 
-## StepLock Enterprise
-
-StepLock is open-core. While the Community Edition provides the complete standalone proxy and Merkle DAG engine, **StepLock Enterprise** offers proprietary commercial modules for large-scale production agent fleets:
-
-```
-                  ┌───────────────────────────────────────────────┐
-                  │                 STEPLOCK CORE                 │
-                  │              (100% Open Source)               │
-                  └───────────────────────┬───────────────────────┘
-                                          │
-                  ┌───────────────────────┴───────────────────────┐
-                  ▼                                               ▼
-     [ OPEN SOURCE COMMUNITY CORE ]                 [ PROPRIETARY ENTERPRISE MODULES ]
-  Distributed under Apache 2.0 on GitHub              Commercial License / Self-Hosted
-  
-  • System.IO.Pipelines SSE Zero-Copy Tap         • Branch Regression Diffing Engine
-  • Basic SQLite WAL Persistence Engine           • L3 Cloud Archive Sync (S3/Blob format)
-  • Python Integration SDK (`steplock`)           • Virtual Timing Replay (1x / 10x / Instant)
-  • Reverse / Forward Proxy MITM Gateway          • Side-Effect Mutation Safety Barrier
-  • WebSocket CDP Duplex Interceptor              • Multi-Tenancy & Usage Quota Management
-  • Merkle DAG Cryptographic Integrity            • 24/7 SLA & Dedicated Architecture Support
-```
-
-👉 Read the full [Enterprise Overview & Feature Breakdown](docs/ENTERPRISE.md) or reach out to [`mxreal64@proton.me`](mailto:mxreal64@proton.me) for dedicated deployment assistance and licensing.
-
----
-
 ## Contributing
 
 Community contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, architecture overview, and PR guidelines.
